@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""Whisper PTT daemon: hold Ctrl+Space to record, release to transcribe via HTTP server."""
+
+import asyncio
+import glob
+import json
+import os
+import signal
+import sys
+import urllib.request
+
+from evdev import InputDevice, ecodes, list_devices
+
+WHISPER_SERVER = 'http://127.0.0.1:9001/inference'
+AUDIO_FILE = '/tmp/whisper_ptt_audio.wav'
+
+# Auto-detect WAYLAND_DISPLAY if not set
+if not os.environ.get('WAYLAND_DISPLAY'):
+    runtime_dir = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
+    for sock in sorted(glob.glob(f'{runtime_dir}/wayland-*')):
+        if not sock.endswith('.lock') and not sock.endswith('renderD128'):
+            os.environ['WAYLAND_DISPLAY'] = os.path.basename(sock)
+            break
+
+ctrl_count = 0
+is_recording = False
+recording_proc = None
+
+
+async def start_recording():
+    global recording_proc, is_recording
+    if is_recording:
+        return
+    is_recording = True
+    try:
+        os.unlink(AUDIO_FILE)
+    except FileNotFoundError:
+        pass
+    recording_proc = await asyncio.create_subprocess_exec(
+        'pw-record', '--channels=1', '--rate=16000', '--format=s16', AUDIO_FILE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    print('Recording...', flush=True)
+
+
+def transcribe_http(audio_path: str) -> str:
+    """POST audio to whisper-server, return transcript text."""
+    boundary = b'----WPTTBoundary'
+    with open(audio_path, 'rb') as f:
+        audio_data = f.read()
+
+    body = (
+        b'--' + boundary + b'\r\n'
+        b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+        b'Content-Type: audio/wav\r\n\r\n'
+        + audio_data + b'\r\n'
+        b'--' + boundary + b'\r\n'
+        b'Content-Disposition: form-data; name="temperature"\r\n\r\n'
+        b'0\r\n'
+        b'--' + boundary + b'\r\n'
+        b'Content-Disposition: form-data; name="response_format"\r\n\r\n'
+        b'json\r\n'
+        b'--' + boundary + b'--\r\n'
+    )
+
+    req = urllib.request.Request(
+        WHISPER_SERVER,
+        data=body,
+        headers={'Content-Type': f'multipart/form-data; boundary={boundary.decode()}'},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        result = json.loads(resp.read())
+    return result.get('text', '').strip()
+
+
+async def stop_and_transcribe():
+    global recording_proc, is_recording
+    if not is_recording:
+        return
+    is_recording = False
+
+    if recording_proc:
+        try:
+            recording_proc.send_signal(signal.SIGTERM)
+            await asyncio.wait_for(recording_proc.wait(), timeout=2.0)
+        except Exception:
+            recording_proc.kill()
+        recording_proc = None
+
+    if not os.path.exists(AUDIO_FILE) or os.path.getsize(AUDIO_FILE) < 4096:
+        print('Audio too short, skipping.', flush=True)
+        return
+
+    print('Transcribing...', flush=True)
+    try:
+        text = await asyncio.get_event_loop().run_in_executor(None, transcribe_http, AUDIO_FILE)
+    except Exception as e:
+        print(f'Server error: {e}', flush=True)
+        return
+
+    if not text:
+        print('No speech detected.', flush=True)
+        return
+
+    print(f'Transcript: {text!r}', flush=True)
+
+    copy_proc = await asyncio.create_subprocess_exec('wl-copy', text)
+    await copy_proc.wait()
+
+    type_proc = await asyncio.create_subprocess_exec('wtype', text)
+    await type_proc.wait()
+
+    try:
+        os.unlink(AUDIO_FILE)
+    except FileNotFoundError:
+        pass
+
+
+async def monitor_device(device):
+    global ctrl_count
+    space_triggered = False
+
+    async for event in device.async_read_loop():
+        if event.type != ecodes.EV_KEY:
+            continue
+
+        code = event.code
+        val = event.value  # 0=up, 1=down, 2=repeat
+
+        if code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
+            if val == 1:
+                ctrl_count += 1
+            elif val == 0:
+                ctrl_count = max(0, ctrl_count - 1)
+
+        elif code == ecodes.KEY_SPACE:
+            if val == 1 and ctrl_count > 0 and not is_recording:
+                space_triggered = True
+                asyncio.create_task(start_recording())
+            elif val == 0 and space_triggered:
+                space_triggered = False
+                asyncio.create_task(stop_and_transcribe())
+
+
+async def main():
+    # Wait for whisper-server to be ready
+    import time
+    for i in range(20):
+        try:
+            urllib.request.urlopen('http://127.0.0.1:9001', timeout=1)
+            break
+        except Exception:
+            if i == 0:
+                print('Waiting for whisper-server...', flush=True)
+            time.sleep(1)
+    else:
+        print('whisper-server not reachable at 127.0.0.1:9001', file=sys.stderr)
+        sys.exit(1)
+
+    devices = []
+    for path in list_devices():
+        try:
+            dev = InputDevice(path)
+            caps = dev.capabilities()
+            if ecodes.EV_KEY in caps and ecodes.KEY_SPACE in caps[ecodes.EV_KEY]:
+                devices.append(dev)
+                print(f'Monitoring: {dev.name} ({dev.path})', flush=True)
+        except Exception:
+            pass
+
+    if not devices:
+        print('No keyboard devices found!', file=sys.stderr)
+        sys.exit(1)
+
+    tasks = [asyncio.create_task(monitor_device(d)) for d in devices]
+    print('Whisper PTT ready. Hold Ctrl+Space to dictate.', flush=True)
+    await asyncio.gather(*tasks)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
