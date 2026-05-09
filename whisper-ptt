@@ -8,10 +8,13 @@ device, so the compositor never sees middle-click (no paste side-effect).
 import asyncio
 import glob
 import json
+import math
 import os
 import signal
+import struct
 import sys
 import urllib.request
+import wave
 
 from evdev import InputDevice, UInput, ecodes, list_devices
 
@@ -46,7 +49,15 @@ async def start_recording():
     print('Recording...', flush=True)
 
 
-NO_SPEECH_THR = 0.5  # segments with no_speech_prob above this are treated as silence
+NO_SPEECH_THR = 0.5
+RMS_THRESHOLD = 200  # s16 samples, ~0.6% of max; tune up if false positives, down if missed speech
+
+
+def audio_rms(audio_path: str) -> float:
+    with wave.open(audio_path, 'rb') as wf:
+        raw = wf.readframes(wf.getnframes())
+    samples = struct.unpack(f'<{len(raw) // 2}h', raw)
+    return math.sqrt(sum(s * s for s in samples) / len(samples)) if samples else 0.0
 
 
 def transcribe_http(audio_path: str) -> str:
@@ -83,7 +94,8 @@ def transcribe_http(audio_path: str) -> str:
 
     parts = []
     for seg in segments:
-        if seg.get('no_speech_prob', 0.0) <= NO_SPEECH_THR:
+        prob = seg.get('no_speech_prob', 0.0)
+        if prob <= NO_SPEECH_THR:
             parts.append(seg.get('text', ''))
 
     return ''.join(parts).strip()
@@ -107,7 +119,12 @@ async def stop_and_transcribe():
         print('Audio too short, skipping.', flush=True)
         return
 
-    print('Transcribing...', flush=True)
+    rms = audio_rms(AUDIO_FILE)
+    if rms < RMS_THRESHOLD:
+        print(f'Silence detected (RMS={rms:.1f}), skipping.', flush=True)
+        return
+
+    print(f'Transcribing... (RMS={rms:.1f})', flush=True)
     try:
         text = await asyncio.get_event_loop().run_in_executor(None, transcribe_http, AUDIO_FILE)
     except Exception as e:
