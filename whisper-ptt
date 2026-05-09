@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Whisper PTT daemon: hold middle mouse button to record, release to transcribe via HTTP server."""
+"""Whisper PTT daemon: hold middle mouse button to record, release to transcribe via HTTP server.
+
+Grabs the mouse exclusively and forwards all events except BTN_MIDDLE through a uinput virtual
+device, so the compositor never sees middle-click (no paste side-effect).
+"""
 
 import asyncio
 import glob
@@ -9,12 +13,11 @@ import signal
 import sys
 import urllib.request
 
-from evdev import InputDevice, ecodes, list_devices
+from evdev import InputDevice, UInput, ecodes, list_devices
 
 WHISPER_SERVER = 'http://127.0.0.1:9001/inference'
 AUDIO_FILE = '/tmp/whisper_ptt_audio.wav'
 
-# Auto-detect WAYLAND_DISPLAY if not set
 if not os.environ.get('WAYLAND_DISPLAY'):
     runtime_dir = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
     for sock in sorted(glob.glob(f'{runtime_dir}/wayland-*')):
@@ -44,7 +47,6 @@ async def start_recording():
 
 
 def transcribe_http(audio_path: str) -> str:
-    """POST audio to whisper-server, return transcript text."""
     boundary = b'----WPTTBoundary'
     with open(audio_path, 'rb') as f:
         audio_data = f.read()
@@ -117,17 +119,24 @@ async def stop_and_transcribe():
         pass
 
 
-async def monitor_device(device):
-    async for event in device.async_read_loop():
-        if event.type != ecodes.EV_KEY:
-            continue
-        if event.code != ecodes.BTN_MIDDLE:
-            continue
-
-        if event.value == 1:
-            asyncio.create_task(start_recording())
-        elif event.value == 0:
-            asyncio.create_task(stop_and_transcribe())
+async def monitor_device(device, virtual):
+    device.grab()
+    try:
+        async for event in device.async_read_loop():
+            if event.type == ecodes.EV_KEY and event.code == ecodes.BTN_MIDDLE:
+                if event.value == 1:
+                    asyncio.create_task(start_recording())
+                elif event.value == 0:
+                    asyncio.create_task(stop_and_transcribe())
+            else:
+                virtual.write(event.type, event.code, event.value)
+                if event.type == ecodes.EV_SYN:
+                    virtual.syn()
+    finally:
+        try:
+            device.ungrab()
+        except Exception:
+            pass
 
 
 async def main():
@@ -144,22 +153,23 @@ async def main():
         print('whisper-server not reachable at 127.0.0.1:9001', file=sys.stderr)
         sys.exit(1)
 
-    devices = []
+    pairs = []
     for path in list_devices():
         try:
             dev = InputDevice(path)
             caps = dev.capabilities()
             if ecodes.EV_KEY in caps and ecodes.BTN_MIDDLE in caps[ecodes.EV_KEY]:
-                devices.append(dev)
+                virtual = UInput.from_device(dev, name=f'whisper-ptt-virtual ({dev.name})')
+                pairs.append((dev, virtual))
                 print(f'Monitoring: {dev.name} ({dev.path})', flush=True)
         except Exception:
             pass
 
-    if not devices:
+    if not pairs:
         print('No mouse devices with middle button found!', file=sys.stderr)
         sys.exit(1)
 
-    tasks = [asyncio.create_task(monitor_device(d)) for d in devices]
+    tasks = [asyncio.create_task(monitor_device(d, v)) for d, v in pairs]
     print('Whisper PTT ready. Hold middle mouse button to dictate.', flush=True)
     await asyncio.gather(*tasks)
 
