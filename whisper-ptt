@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Whisper PTT daemon: hold Ctrl+Space to record, release to transcribe via HTTP server."""
+"""Whisper PTT daemon: hold middle mouse button to record, release to transcribe via HTTP server."""
 
 import asyncio
 import glob
@@ -22,7 +22,6 @@ if not os.environ.get('WAYLAND_DISPLAY'):
             os.environ['WAYLAND_DISPLAY'] = os.path.basename(sock)
             break
 
-ctrl_count = 0
 is_recording = False
 recording_proc = None
 
@@ -119,33 +118,19 @@ async def stop_and_transcribe():
 
 
 async def monitor_device(device):
-    global ctrl_count
-    space_triggered = False
-
     async for event in device.async_read_loop():
         if event.type != ecodes.EV_KEY:
             continue
+        if event.code != ecodes.BTN_MIDDLE:
+            continue
 
-        code = event.code
-        val = event.value  # 0=up, 1=down, 2=repeat
-
-        if code in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
-            if val == 1:
-                ctrl_count += 1
-            elif val == 0:
-                ctrl_count = max(0, ctrl_count - 1)
-
-        elif code == ecodes.KEY_SPACE:
-            if val == 1 and ctrl_count > 0 and not is_recording:
-                space_triggered = True
-                asyncio.create_task(start_recording())
-            elif val == 0 and space_triggered:
-                space_triggered = False
-                asyncio.create_task(stop_and_transcribe())
+        if event.value == 1:
+            asyncio.create_task(start_recording())
+        elif event.value == 0:
+            asyncio.create_task(stop_and_transcribe())
 
 
 async def main():
-    # Wait for whisper-server to be ready
     import time
     for i in range(20):
         try:
@@ -164,18 +149,18 @@ async def main():
         try:
             dev = InputDevice(path)
             caps = dev.capabilities()
-            if ecodes.EV_KEY in caps and ecodes.KEY_SPACE in caps[ecodes.EV_KEY]:
+            if ecodes.EV_KEY in caps and ecodes.BTN_MIDDLE in caps[ecodes.EV_KEY]:
                 devices.append(dev)
                 print(f'Monitoring: {dev.name} ({dev.path})', flush=True)
         except Exception:
             pass
 
     if not devices:
-        print('No keyboard devices found!', file=sys.stderr)
+        print('No mouse devices with middle button found!', file=sys.stderr)
         sys.exit(1)
 
     tasks = [asyncio.create_task(monitor_device(d)) for d in devices]
-    print('Whisper PTT ready. Hold Ctrl+Space to dictate.', flush=True)
+    print('Whisper PTT ready. Hold middle mouse button to dictate.', flush=True)
     await asyncio.gather(*tasks)
 
 
