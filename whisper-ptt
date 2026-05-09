@@ -87,7 +87,7 @@ def transcribe_http(audio_path: str) -> str:
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read())
 
-    return result.get('text', '').strip()
+    return result.get('text', '').replace('\n', ' ').strip()
 
 
 async def stop_and_transcribe():
