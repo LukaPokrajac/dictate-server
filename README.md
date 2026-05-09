@@ -3,9 +3,6 @@
 Push-to-talk voice dictation for Linux/Wayland — hold the middle mouse button, speak, release to paste.
 
 The whisper model stays loaded in VRAM between recordings, so transcription is near-instant instead of paying a cold-start cost on every press.
-
-Fork of [dictate](https://github.com/LukaPokrajac/dictate) with an HTTP server backend instead of direct `whisper-cli` invocation.
-
 ## Architecture
 
 ```
