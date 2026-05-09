@@ -1,43 +1,43 @@
 # dictate-server
 
-Push-to-talk diktiranje glasom — whisper model stalno učitan u VRAM.
+Push-to-talk voice dictation — whisper model permanently loaded in VRAM.
 
-Fork od [dictate](https://github.com/LukaPokrajac/dictate) sa HTTP serverom umjesto direktnog poziva `whisper-cli`. Model se učita jednom pri startu i ostaje u memoriji, svaka transkripcija je znatno brža.
+Fork of [dictate](https://github.com/LukaPokrajac/dictate) with an HTTP server instead of direct `whisper-cli` invocation. The model loads once at startup and stays in memory, making each transcription significantly faster.
 
-## Arhitektura
+## Architecture
 
 ```
 Ctrl+Space → pw-record → whisper-ptt → HTTP POST → whisper-server → JSON
-                                                                      ↓
-                                              wl-copy + wtype ← text
+                                                                     ↓
+                                             wl-copy + wtype ← text
 ```
 
-- `whisper-server` — whisper.cpp HTTP server, model u VRAM, sluša na `127.0.0.1:9001`
-- `whisper-ptt` — PTT daemon, audio šalje POST-om na `/inference`
+- `whisper-server` — whisper.cpp HTTP server, model in VRAM, listens on `127.0.0.1:9001`
+- `whisper-ptt` — PTT daemon, sends audio via POST to `/inference`
 
-## Zavisnosti
+## Dependencies
 
-- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) buildan sa Vulkan backendom (`whisper-server` binary)
-- Model `ggml-large-v3-turbo.bin` na `/home/pokr/whisper.cpp/models/`
+- [whisper.cpp](https://github.com/ggerganov/whisper.cpp) built with Vulkan backend (`whisper-server` binary)
+- Model `ggml-large-v3-turbo.bin` at `/home/pokr/whisper.cpp/models/`
 - `python-evdev`, `pipewire` (`pw-record`), `wl-clipboard` (`wl-copy`), `wtype`
 
-## Instalacija
+## Installation
 
 ```bash
-# Dodaj sebe u input grupu (jedanput, zahtijeva logout)
+# Add yourself to the input group (once, requires logout)
 sudo usermod -aG input $USER
 
-# Instaliraj daemon i servise
+# Install daemon and services
 bash install.sh
 ```
 
-## Upravljanje
+## Management
 
 ```bash
 # Status
 systemctl --user status whisper-server whisper-ptt
 
-# Logovi
+# Logs
 journalctl --user -u whisper-server -f
 journalctl --user -u whisper-ptt -f
 
