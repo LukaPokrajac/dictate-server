@@ -49,8 +49,7 @@ async def start_recording():
     print('Recording...', flush=True)
 
 
-NO_SPEECH_THR = 0.5
-RMS_THRESHOLD = 200  # s16 samples, ~0.6% of max; tune up if false positives, down if missed speech
+RMS_THRESHOLD = 600
 
 
 def audio_rms(audio_path: str) -> float:
@@ -75,7 +74,7 @@ def transcribe_http(audio_path: str) -> str:
         b'0\r\n'
         b'--' + boundary + b'\r\n'
         b'Content-Disposition: form-data; name="response_format"\r\n\r\n'
-        b'verbose_json\r\n'
+        b'json\r\n'
         b'--' + boundary + b'--\r\n'
     )
 
@@ -88,17 +87,7 @@ def transcribe_http(audio_path: str) -> str:
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read())
 
-    segments = result.get('segments', [])
-    if not segments:
-        return ''
-
-    parts = []
-    for seg in segments:
-        prob = seg.get('no_speech_prob', 0.0)
-        if prob <= NO_SPEECH_THR:
-            parts.append(seg.get('text', ''))
-
-    return ''.join(parts).strip()
+    return result.get('text', '').strip()
 
 
 async def stop_and_transcribe():
