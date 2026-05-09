@@ -46,6 +46,9 @@ async def start_recording():
     print('Recording...', flush=True)
 
 
+NO_SPEECH_THR = 0.5  # segments with no_speech_prob above this are treated as silence
+
+
 def transcribe_http(audio_path: str) -> str:
     boundary = b'----WPTTBoundary'
     with open(audio_path, 'rb') as f:
@@ -61,7 +64,7 @@ def transcribe_http(audio_path: str) -> str:
         b'0\r\n'
         b'--' + boundary + b'\r\n'
         b'Content-Disposition: form-data; name="response_format"\r\n\r\n'
-        b'json\r\n'
+        b'verbose_json\r\n'
         b'--' + boundary + b'--\r\n'
     )
 
@@ -73,7 +76,17 @@ def transcribe_http(audio_path: str) -> str:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read())
-    return result.get('text', '').strip()
+
+    segments = result.get('segments', [])
+    if not segments:
+        return ''
+
+    parts = []
+    for seg in segments:
+        if seg.get('no_speech_prob', 0.0) <= NO_SPEECH_THR:
+            parts.append(seg.get('text', ''))
+
+    return ''.join(parts).strip()
 
 
 async def stop_and_transcribe():
