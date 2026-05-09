@@ -18,8 +18,10 @@ import wave
 
 from evdev import InputDevice, UInput, ecodes, list_devices
 
-WHISPER_SERVER = 'http://127.0.0.1:9001/inference'
+WHISPER_SERVER = os.environ.get('WHISPER_SERVER', 'http://127.0.0.1:9001/inference')
 AUDIO_FILE = '/tmp/whisper_ptt_audio.wav'
+RMS_THRESHOLD = 400   # minimum RMS to treat audio as non-silent; raise if picking up background noise
+PTT_BUTTON = 'BTN_MIDDLE'  # change to BTN_RIGHT, BTN_SIDE, etc.
 
 if not os.environ.get('WAYLAND_DISPLAY'):
     runtime_dir = os.environ.get('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
@@ -47,9 +49,6 @@ async def start_recording():
         stderr=asyncio.subprocess.DEVNULL,
     )
     print('Recording...', flush=True)
-
-
-RMS_THRESHOLD = 400
 
 
 def audio_rms(audio_path: str) -> float:
@@ -142,7 +141,7 @@ async def monitor_device(device, virtual):
     device.grab()
     try:
         async for event in device.async_read_loop():
-            if event.type == ecodes.EV_KEY and event.code == ecodes.BTN_MIDDLE:
+            if event.type == ecodes.EV_KEY and event.code == ecodes.codes[PTT_BUTTON]:
                 if event.value == 1:
                     asyncio.create_task(start_recording())
                 elif event.value == 0:
@@ -177,7 +176,7 @@ async def main():
         try:
             dev = InputDevice(path)
             caps = dev.capabilities()
-            if ecodes.EV_KEY in caps and ecodes.BTN_MIDDLE in caps[ecodes.EV_KEY]:
+            if ecodes.EV_KEY in caps and ecodes.codes[PTT_BUTTON] in caps[ecodes.EV_KEY]:
                 virtual = UInput.from_device(dev, name=f'whisper-ptt-virtual ({dev.name})')
                 pairs.append((dev, virtual))
                 print(f'Monitoring: {dev.name} ({dev.path})', flush=True)

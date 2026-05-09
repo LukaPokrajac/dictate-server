@@ -4,8 +4,8 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/home/pokr/whisper.cpp/build/bin/whisper-server \
-    -m /home/pokr/whisper.cpp/models/ggml-large-v3-turbo.bin \
+ExecStart=%h/whisper.cpp/build/bin/whisper-server \
+    -m %h/whisper.cpp/models/ggml-large-v3-turbo.bin \
     -l auto \
     --host 127.0.0.1 \
     --port 9001 \
