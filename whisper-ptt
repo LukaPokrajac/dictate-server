@@ -49,7 +49,7 @@ async def start_recording():
     print('Recording...', flush=True)
 
 
-RMS_THRESHOLD = 350
+RMS_THRESHOLD = 400
 
 
 def audio_rms(audio_path: str) -> float:
